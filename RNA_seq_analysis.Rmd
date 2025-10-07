@@ -1,0 +1,750 @@
+---
+title: "RNA-seq_analysis_project"
+author: "ramisha azhar"
+date: "2025-09-21"
+output: 
+  html_document: 
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r eval=FALSE}
+setwd("C:/Users/ramis/OneDrive/Desktop/bioinformetics 1/RNA_seq_analysis")
+list.files('../RNA_seq_analysis')
+```
+# Project
+**[The Project](file:///C:/Users/ramis/OneDrive/Desktop/bioinformetics%201/Bioinformatics1_2025-20250716T162722Z-1-001/Bioinformatics1_2025/EXAM%20project/project_RNAseq_2025.html#Software_to_install_in_your_conda_environment)**
+
+# Disease sample
+
+**ALS( Amyotrophic
+Lateral Sclerosis)** is a fatal neurodegenerative
+disorder in which motor neurons
+progressively die leading to muscle weakness, paralysis, and eventually breathing failure  
+**C9ORF72 repeat** which is expansions of a hexanucleotide (GGGGCC) repeat in the C9ORF72 gene. It is the most common genetic cause, linking ALS to toxic RNA and protein mechanisms.  
+Cognitive functions are usually preserved, but in some patients, frontotemporal dementia (FTD)
+co-occurs.
+
+# The Experiment
+
+**[Targeting RNA foci in iPSC-derived motor neurons from ALS patients with C9ORF72 repeat expansion](https://www.ebi.ac.uk/gxa/experiments/E-GEOD-52202/Results?specific=false&geneQuery=%255B%255D&filterFactors=%257B%257D&cutoff=%257B%2522foldChange%2522%253A1%252C%2522pValue%2522%253A0.05%257D&regulation=%2522UP%2522)**
+
+We Use *iPSC-derived motor neurons* from C9ORF72-ALS patients to model the disease.
+Determine if ALS pathology is due to:
+
+
+* Loss of function (reduced C9ORF72 expression)
+* Gain of function (toxic RNA/protein from repeat expansions)
+
+
+*RNA-binding proteins (RBPs)* are crucial for RNA processing (splicing, transport, stability, translation, localization)  
+
+
+In C9ORF72-ALS, repeat RNAs form *RNA foci* that trap RBPs, leading to Mis-splicing of many genes,Disrupted RNA transport and Neuronal dysfunction.
+
+
+Gene Expression also changes
+Patient motor neurons show altered expression of genes controlling **membrane excitability** (e.g., DPP6, KCNQ3).
+These neurons have reduced ability to fire continuous action potentials, impairing communication with muscles and contributing to ALS symptoms.
+* ASO Treatment
+Antisense oligonucleotides (ASOs) targeting C9ORF72 RNA suppressed RNA foci, partially reversed abnormal gene expression  
+C9ORF72-ALS is mainly caused by toxic gain-of-function RNA (not just loss of gene expression).
+ASOs are a promising therapy to block toxic RNA effects and restore normal gene expression in ALS patient neurons.
+
+---
+
+# DESeq2
+
+Differential Expression (DE) analysis using DESeq2
+It’s the process of finding which genes are expressed differently between experimental conditions (e.g., treatment vs control, diseased vs healthy, knockout vs wild-type).
+
+```{r message=TRUE, warning=TRUE}
+# load library
+suppressMessages(suppressWarnings(library(DESeq2)))
+
+```
+
+
+## The **read count table**:
+
+```{r}
+counts <- read.table('../RNA_seq_analysis/data/E-GEOD-52202-raw-counts.txt', header = TRUE, row.names = 1, sep = "\t")  
+#remove the "Gene.Name" column
+countData <- as.matrix(subset(counts, select = c(-Gene.Name)))
+head(countData,10) #it is a numerical matrix
+dim(countData)
+summary(countData)
+
+```
+
+
+## A **colData** table:
+
+it’s essentially for the experimental setup that tells DESeq2 how to compare samples.
+DESeq2 uses colData together with the design formula to know what comparisons to make.
+```{r}
+# read in sample info
+colData <- read.table("../RNA_seq_analysis/data/E-GEOD-52202-experiment-design.tsv", header = TRUE, row.names=1 , sep = '\t', 
+                      stringsAsFactors = TRUE)
+colData<-colData[,c(1,3,5,7,9,11)] #clean the data frame
+colData
+colnames(colData)
+rownames(colData)
+dim(colData)
+str(colData)
+```
+
+
+## A **design formula**:
+
+The design formula requires categorical variables to be factors.
+With a factor, DESeq2 knows how to build comparisons (baseline vs other levels).
+```{r}
+#define the design formula
+designFormula <- "~Sample.Characteristic.disease."
+```
+
+
+```{r}
+# making sure the row names in colData matches to column names in countData
+all(colnames(countData) %in% rownames(colData))
+
+# Reorder colData to match the column names of countData
+colData<- colData[colnames(countData),]
+all(colnames(countData) == rownames(colData))
+```
+
+
+## construct a **DESeqDataSet object**:
+
+```{r}
+#create a DESeq dataset object from the countData and the colData 
+dds <- DESeqDataSetFromMatrix(countData = countData,   colData = colData,  design = as.formula(designFormula))
+
+print(dds)
+#dim: 58735 16 
+#assays(1) This means my object has 1 assay raw counts.
+```
+
+
+## Filtering **non-expressed genes**:
+
+we calculate the sum across a particular row it will give the number of samples that gene is expressed in.
+```{r }
+is_expressed <- assay(dds) >= 1
+head(is_expressed) #logical vector
+sampleCount<-apply(is_expressed,1,function(x) sum(x) )
+head(sampleCount,10)
+
+```
+ 
+filtering removing rows with low gene counts and keeping rows that have at least 1 read total
+ 
+```{r}
+keep <- rowSums(counts(dds)) > 1
+dds <- dds[keep,]
+dds
+nrow(dds)
+table(keep)
+```
+
+
+### Visualizing count distributions:
+
+- plot a histogram
+
+```{r }
+hist(sampleCount, main="Number of samples a gene is expressed in",xlab="Sample Count")
+dev.copy(pdf, "images/count distribution/histogram.pdf", width = 7, height = 5)
+dev.off()
+```
+
+- box plot
+```{r}
+boxplot(log10(assay(dds)+1))
+dev.copy(pdf, "images/count distribution/boxplot.pdf", width = 7, height = 5)
+dev.off()
+```
+
+
+# DESeq2 pipeline
+
+
+## set the factor level:
+ 
+```{r}
+dds$Sample.Characteristic.disease. <- relevel(dds$Sample.Characteristic.disease., ref = "normal")
+```
+ 
+## DESeq() 
+
+```{r}
+dds <- DESeq(dds)
+```
+ 
+## DE Results
+
+```{r}
+DEresults <- results(dds, contrast = c("Sample.Characteristic.disease.", 'ALS', 'normal'))
+DEresults
+```
+
+```{r}
+summary(DEresults)
+```
+
+with the treshold of *pdaj<0.05* and *log2FC* of 0
+```{r}
+sig <- subset(DEresults, padj < 0.05 & abs(log2FoldChange) > 0)
+sig
+summary(sig)
+```
+
+---
+
+# Diagnostic plots 
+
+## MAplot
+
+**X-axis** mean of normalized counts across all samples (in log10 scale).
+
+
+**Y-axis** estimated log2 fold change between conditions
+
+
+blue points highlight **significant DE genes**.
+
+
+Helps us quickly see whether we have many up-/down-regulated genes 
+Most points are expected to be on the horizontal 0 line (most genes are not expected to be differentially expressed).
+
+```{r}
+plotMA(DEresults,ylim = c(-5, 5))
+dev.copy(pdf, "images/Diagnostic plots/MA plot.pdf", width = 7, height = 5)
+dev.off()
+```
+
+
+## P-value distribution
+
+Peak at low p-values (< 0.05) this indicates that some genes are truly differentially expressed, they show strong evidence of change between conditions.
+
+Uniform distribution at high p-values (> 0.1) this suggests that the rest of the genes are not significantly different and behave randomly, as expected under the null hypothesis.
+
+after this analysis the padj values are meaningful
+```{r}
+library(ggplot2)
+ggplot(data = as.data.frame(DEresults), aes(x = pvalue)) + 
+  geom_histogram(colour='black',fill='white', bins = 100)
+dev.copy(pdf, "images/Diagnostic plots/p-value distribution.pdf", width = 7, height = 5)
+dev.off()
+```
+
+## Principal Component Analysis(PCA) plot
+
+we use`rlog()`to transformed our counts from dds. It stabilizes the variance across the range of counts, making the data more suitable for PCA and visualization.
+PCA plot helps us to see if our samples is cluster by group
+ntop = 500 means the plot uses the 500 most variable genes (those that differ the most between samples).
+```{r message=FALSE, warning=FALSE}
+rld <- rlog(dds)
+DESeq2::plotPCA(rld, ntop = 500, intgroup = 'Sample.Characteristic.disease.') + 
+   theme_bw()
+dev.copy(pdf, "images/Diagnostic plots/PCA plot.pdf", width = 7, height = 5)
+dev.off()
+```
+
+## Heatmap of the sample-to-sample distances
+
+we use`assay()`to extract our rld object from dds which is log of our normalized count in the count matrix ,then we transpose the matrix with `t()`it convert samples into rows so we can apply `dist()` function that compute the distance between the samples based on the gene expression value which reflect which samples are similar based on expression 
+
+```{r}
+sampleDists <- dist(t(assay(rld)))
+sampleDists # Calculate distances between samples
+
+```
+
+```{r}
+library("pheatmap")
+library("RColorBrewer")
+sampleDistMatrix <- as.matrix( sampleDists )
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+```
+
+```{r }
+#colData(dds)
+annotation_col <- as.data.frame(
+  colData(dds)[, 'Sample.Characteristic.disease.', drop = FALSE] #Add sample annotations
+)
+print(annotation_col)
+
+```
+
+```{r}
+library(pheatmap)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors,
+      annotation_col = annotation_col,  
+  main = "Sample-to-sample distances" )
+
+dev.copy(pdf, "images/Diagnostic plots/Heatmap of the sample-to-sample distances.pdf", width = 10, height = 7)
+dev.off()
+```
+
+## Volcano plot
+
+```{r message=FALSE, warning=FALSE}
+res <- as.data.frame(DEresults)
+
+# Create a column for significance
+res$threshold <- "Not significant"
+res$threshold[res$padj < 0.1 & res$log2FoldChange > 0] <- "up"
+res$threshold[res$padj < 0.1 & res$log2FoldChange < 0] <- "down"
+
+# Volcano plot
+ggplot(res, aes(x = log2FoldChange, y = -log10(padj), color = threshold)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  scale_color_manual(values = c("up" = "red", "down" = "blue", "Not significant" = "grey")) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +     # FC cutoffs
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") + # padj cutoff
+  labs(
+    title = "Volcano Plot of Differential Expression",
+    x = "log2 Fold Change",
+    y = "-log10 Adjusted P-value"
+  ) +
+  theme_minimal()
+dev.copy(pdf, "images/Diagnostic plots/Volcano plot.pdf", width = 10, height = 7)
+dev.off()
+
+```
+
+## Heatmap
+
+Heatmap of the top 50 most differentially expressed genes 
+```{r}
+vsd <- vst(dds, blind = TRUE) ## Variance stabilizing transform 
+
+top50_vsd<-head(order(rowVars(assay(vsd)), decreasing = TRUE), 50) #: Select the top 50 variable genes
+
+#Extract and scale the matrices
+mat_vsd <- assay(vsd)[top50_vsd, ]
+mat_vsd <- t(scale(t(mat_vsd)))
+
+
+annotation_col <- as.data.frame(colData(dds)[, 'Sample.Characteristic.disease.', drop = FALSE])
+
+pheatmap(mat_vsd,
+         annotation_col = annotation_col,
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         fontsize_row = 6,)
+dev.copy(pdf, "images/Diagnostic plots/Heatmap.pdf", width = 10, height = 7)
+dev.off()
+         
+```
+
+---
+
+# Select DE
+
+1838 genes are expressed at the treshold of 0.1 and log2FC of 0
+```{r}
+#remove genes with NA values 
+DEG<- DEresults[!is.na(DEresults$padj),]
+#select genes with adjusted p-values below 0.1
+DEG <- DEG[DEG$padj < 0.1,]
+#select genes with absolute log2 fold change above 1 (two-fold change)
+DEG <- DEG[abs(DEG$log2FoldChange) > 0,]
+DEG
+summary(DEG)
+```
+
+
+1242 genes are expressed at the treshold of padj<0.05 and logFC2 of 0
+```{r}
+#remove genes with NA values 
+DE<- DEresults[!is.na(DEresults$padj),]
+#select genes with adjusted p-values below 0.05
+DE <- DE[DE$padj < 0.05,]
+
+DE <- DE[abs(DE$log2FoldChange) > 0,]
+DE
+summary(DE)
+write.table(DE, file = "filtered_DEGs.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+---
+
+# Add annotation for genes 
+
+Here we are adding a new column with official human *gene symbo*l which crosspondes to the Ensemble ID(rowname) in our DE.
+`mapIds()`= ID translator for genes.
+It takes our input IDs (keys), knows what kind they are (keytype), and returns another ID type (column) using the chosen organism database.
+```{r message=FALSE, warning=FALSE}
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+
+DE$symbol <- mapIds(
+  org.Hs.eg.db,            # human annotation database
+  keys = rownames(DE),     # Ensembl IDs
+  column = "SYMBOL",       # return gene symbols
+  keytype = "ENSEMBL",     # input IDs are Ensembl
+  multiVals = "first"      # take the first match if multiple
+)
+head(DE$symbol,10)
+```
+
+
+here we are mapping Ensembl IDs to Entrez IDs,a new column *ENTREZID* gets added to our DE .Entrez IDs are the preferred input for many enrichment tools like GO, KEGG, Reactome.
+```{r message=FALSE, warning=FALSE}
+DE$entrez <- mapIds(org.Hs.eg.db,
+                    keys=rownames(DE),
+                    column="ENTREZID",
+                    keytype="ENSEMBL",
+                    multiVals="first")
+head(DE$entrez, 10)
+
+colnames(DE)
+dim(DE)
+```
+
+# GO enrichment analysis
+
+`enrichGO()`tests whether our gene list of DE is enriched in GO terms compared to the whole genome background to get our list of over represented pathways and this type of analysis is called *over-representation analysis (ORA)*
+
+**ont** specifies which branch of GO to use:
+
+**BP** = Biological Process
+
+**MF** = Molecular Function
+
+**CC** = Cellular Component
+```{r}
+suppressMessages(suppressWarnings(library(clusterProfiler)))
+
+GO_BP <- enrichGO(DE$symbol, OrgDb = "org.Hs.eg.db", 
+                  keyType = "SYMBOL", ont = "BP")
+#head(GO_BP)
+dim(GO_BP)
+
+GO_MF <- enrichGO(DE$symbol, OrgDb = "org.Hs.eg.db", 
+                  keyType = "SYMBOL", ont = "MF")
+dim(GO_MF)
+
+GO_CC <- enrichGO(DE$symbol, OrgDb = "org.Hs.eg.db", 
+                  keyType = "SYMBOL", ont = "CC")
+dim(GO_CC)
+```
+
+
+## Plotting the results
+
+The *dotplot* is one of the most popular ways to visualize enrichment results
+This makes it easy to spot the strongest enrichment.
+
+```{r out.width, message=FALSE, warning=FALSE,out.width='50%'}
+
+dotplot(GO_BP, title = "Biological Process")
+dev.copy(pdf, "images/Dot Plots/dot plot of biological process.pdf", width = 10, height = 7)
+dev.off()
+```
+
+```{r message=FALSE, warning=FALSE, out.width='50%'}
+dotplot(GO_MF, title = "Molecular Functions")
+dev.copy(pdf, "images/Dot Plots/dot plot of molecular function.pdf", width = 10, height = 7)
+dev.off()
+```
+
+```{r message=FALSE, warning=FALSE, out.width='50%'}
+dotplot(GO_CC, title = "Cellular Component")
+dev.copy(pdf, "images/Dot Plots/dot plot of cellular component.pdf", width = 10, height = 7)
+dev.off()
+```
+
+
+# Analyze UP and DOWN regulated genes
+
+these two lines are filtering our differential expression (DE) results into upregulated and downregulated gene
+
+```{r}
+DE_up <- DE[DE$log2FoldChange > 0,]
+DE_up#significantly upregulated genes.
+
+DE_down <- DE[DE$log2FoldChange < 0,]#significantly downregulated genes.
+DE_down
+```
+
+
+# Enrichment analysis
+
+It contains enrichment results for both UP and DOWN lists, tagged with a group label.
+
+## analysis with BP
+
+This code compares GO Biological Process enrichment between upregulated and downregulated genes, helping us understand if different biological processes are driving up vs down changes.
+
+number of enriched terms found for each gene cluster:
+- UP: 0 (No GO terms were significantly enriched for the UP genes.)
+- DOWN: 20 (20 GO terms were significantly enriched for the DOWN genes)
+```{r }
+
+GO_up_down <- compareCluster(list(UP = DE_up$symbol, DOWN = DE_down$symbol),  # two gene lists 
+                             fun = "enrichGO",  # enrichment function
+                             OrgDb = "org.Mm.eg.db", # organism annotation database
+                             keyType = "SYMBOL",  # input gene IDs
+                             ont = "BP", # GO ontology 
+      pvalueCutoff = 0.2)
+                         
+GO_up_down
+ 
+head(as.data.frame(GO_up_down))
+
+```
+
+This will plot enriched biological processes for both UP and DOWN genes, so we can immediately see which functions are enriched in each set.
+```{r}
+dotplot(GO_up_down)
+dev.copy(pdf, "images/Dot Plots/GO_UP_DOWN plot for BP.pdf", width = 10, height = 7)
+dev.off()
+
+```
+
+## Analysis with MF
+```{r message=FALSE, warning=FALSE}
+GO_Up_Down <- compareCluster(list(UP = DE_up$symbol, DOWN = DE_down$symbol),  # two gene lists 
+                             fun = "enrichGO",  # enrichment function
+                             OrgDb = "org.Mm.eg.db", # organism annotation database
+                             keyType = "SYMBOL",  # input gene IDs
+                             ont = "MF", # GO ontology 
+      pvalueCutoff = 0.7)
+                         
+GO_Up_Down
+ 
+#as.data.frame(GO_up_down)
+```
+
+
+# Pathways databases
+
+## REACTOME
+we are doing a comparative Reactome pathway enrichment analysis.
+REACTOMEupdown is a compareClusterResult object containing enriched Reactome pathways for both UP and DOWN lists.
+Number of enriched terms found for each gene cluster:
+- UP: 6 (UP-regulated genes: 6 Reactome pathways enriched)
+- DOWN: 67 (DOWN-regulated genes: 67 Reactome pathways enriched.)
+```{r }
+suppressMessages(suppressWarnings(library(ReactomePA)))
+REACTOMEupdown <-
+  compareCluster(list(UP = DE_up$entrez, DOWN = DE_down$entrez),
+    fun = "enrichPathway", # Reactome enrichment function
+    organism = "human",
+    pvalueCutoff = 0.05,
+    qvalueCutoff = 0.05,
+    readable = TRUE  # convert Entrez IDs back to gene symbols
+    )
+REACTOMEupdown
+head(as.data.frame(REACTOMEupdown),10)
+dim(REACTOMEupdown)
+```
+
+```{r}
+
+dotplot(REACTOMEupdown)
+        
+dev.copy(pdf, "images/Dot Plots/REACTOMEupdown.pdf", width = 10, height = 7)
+dev.off()
+
+```
+
+---
+
+# GSEA: Gene Set Enrichment Analysis:
+
+Hallmark(H) collection have 50 curated gene sets and together they contain 7,333 human genes
+```{r message=FALSE, warning=FALSE}
+library(msigdbr)
+h_gene_sets <- msigdbr(species = "Homo sapiens", category = "H") #Get Hallmark ("H") gene sets for human
+dim(h_gene_sets)
+# 7333   23
+
+
+#build TERM2GENE table for GSEA
+
+#This keeps two columns:
+#gs_name (the pathway name)
+#ensembl_gene ID
+
+msigdbr_t2g <-
+  as.data.frame(dplyr::distinct(h_gene_sets, gs_name, ensembl_gene)) 
+
+head(msigdbr_t2g)
+dim(msigdbr_t2g) # 7333   2
+```
+
+## Running GSEA
+
+we have to create ranking list as our input for GSEA result because unlike other enrichment analysis GSEA will not take DE genes as input
+```{r message=FALSE, warning=FALSE}
+# create the gene rank 
+rank <- DEG$stat
+names(rank) <- rownames(DEG) #attaches gene IDs as names to the statistic values.
+
+# run GSEA
+gsea <- clusterProfiler::GSEA(geneList = sort(rank, decreasing = TRUE), TERM2GENE = msigdbr_t2g, pvalueCutoff = 0.1)
+
+gsea_res <- as.data.frame(gsea)
+dim(gsea_res) #28 11
+View(gsea_res)
+write.table(gsea_res , file = "GSEA gene sets.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+
+```
+
+## GSEA Enrichment plots
+
+```{r message=FALSE, warning=FALSE}
+# 1st enriched Hallmark geneset:
+library(enrichplot)
+gseaplot(gsea, geneSetID = 1, by = "runningScore", title = "GSEA ES plot")
+
+dev.copy(pdf, "images/GSEA Plots/ GSEA plot 1.pdf", width = 10, height = 7)
+dev.off()
+```
+
+```{r}
+#2nd enriched Hallmark geneset.
+gseaplot(gsea, geneSetID = 2, by = "runningScore", title = "GSEA ES plot")
+
+dev.copy(pdf, "images/GSEA Plots/ GSEA plot 2.pdf", width = 10, height = 7)
+dev.off()
+```
+
+```{r}
+#3rd enriched Hallmark geneset.
+gseaplot(gsea, geneSetID = 3, by = "runningScore", title = "GSEA ES plot")
+
+dev.copy(pdf, "images/GSEA Plots/ GSEA plot 3.pdf", width = 10, height = 7)
+dev.off()
+```
+
+```{r}
+#4th enriched Hallmark geneset.
+gseaplot(gsea, geneSetID = 4, by = "runningScore", title = "GSEA ES plot")
+
+dev.copy(pdf, "images/GSEA Plots/GSEA plot 4.pdf", width = 10, height = 7)
+dev.off()
+```
+
+```{r}
+#5th enriched Hallmark geneset.
+gseaplot(gsea, geneSetID = 5, by = "runningScore", title = "GSEA ES plot")
+
+dev.copy(pdf, "images/GSEA Plots/ GSEA plot 5.pdf", width = 10, height = 7)
+dev.off()
+
+```
+
+## bar plot of the GSEA results plotting NES values
+
+```{r}
+library(ggplot2)
+ggplot(gsea, aes(NES, reorder(Description, NES), fill=qvalue),
+       showCategory=20) + 
+  geom_col(orientation='y') +
+  scale_fill_continuous(low='red', 
+                        high='blue', 
+                        guide=guide_colorbar(reverse=TRUE)) + 
+  ylab(NULL) + 
+  ggtitle("GSEA Hallmark") +
+  theme_minimal()
+dev.copy(pdf, "images/GSEA Plots/ GSEA barplot.pdf", width = 10, height = 7)
+dev.off()
+
+```
+
+
+## Heatmap of the core enriched genes of GSEA gene set
+
+*coregenes* will be a vector of the genes in the leading edge subset for the first enriched pathway in our GSEA results.
+This accesses the first gene set in our GSEA results and retrieves the core enrichment genes, the genes that contributed most to the enrichment score.
+
+```{r}
+coregenes <- as.vector(stringr::str_split(string = gsea@result$core_enrichment[1], pattern = "/", simplify = TRUE))
+head(coregenes,10)
+length(coregenes)
+
+```
+
+
+```{r}
+library(pheatmap)
+pheatmap(assay(rld)[coregenes, ], main = "Core genes")
+
+dev.copy(pdf, "images/GSEA Plots/ core genes from 1st gene set .pdf", width = 10, height = 7)
+dev.off()
+```
+
+
+we are mapping your core genes from GSEA into readable gene symbols with the help of `mapIds()` function
+```{r}
+library("AnnotationDbi")
+library('org.Hs.eg.db')
+coresymbol <- mapIds(org.Hs.eg.db,
+                    keys=coregenes,
+                    column="SYMBOL",
+                    keytype="ENSEMBL",
+                    multiVals="first")
+
+as.vector(coresymbol)
+
+pheatmap(assay(rld)[coregenes, ], main = "Core genes", labels_row = coresymbol)
+
+dev.copy(pdf, "images/GSEA Plots/ core genes symbol .pdf", width = 10, height = 7)
+dev.off()
+```
+
+
+## Heatmap of scale data across genes 
+
+```{r}
+pheatmap(assay(rld)[coregenes, ], main = "Core genes", labels_row = coresymbol, scale = "row")
+
+dev.copy(pdf, "images/GSEA Plots/ scale data across core genes .pdf", width = 10, height = 7)
+dev.off()
+
+```
+
+
+- Choice one of the GO enrichment results and report how many categories are significant (p.adjust < 0.05)
+BP (biological process) enrichment result
+```{r}
+GO_BP_df <- as.data.frame(GO_BP)
+#View(GO_BP_df)
+dim(GO_BP_df)
+sig_GO <- GO_BP_df[GO_BP_df$p.adjust < 0.05, ]
+n_sig <- nrow(sig_GO)
+n_sig
+head(sig_GO[, c("ID", "Description", "p.adjust")], 10)
+
+```
+
+- gene present in the most enrich catogery of GO_BP enrichment result
+```{r}
+GO_BP_df <- as.data.frame(GO_BP)
+GO_BP_df <- GO_BP_df[order(GO_BP_df$p.adjust), ]
+most_enriched_genes <- strsplit(GO_BP_df$geneID[1], "/")[[1]]
+length(most_enriched_genes)
+
+
+```
+
+# reads quality with FastQC:
+- [FastQC on disease sample](file:///C:/Users/ramis/OneDrive/Desktop/bioinformetics%201/RNA-seq%20analysis/FastQC%20and%20MultiQC%20report/FastQC_on_data_DISEASE%20sample%20__Webpage/FastQC_on_data_17__Webpage_html.html)
+
+- [FastQC on normal sample](file:///C:/Users/ramis/OneDrive/Desktop/bioinformetics%201/RNA-seq%20analysis/FastQC%20and%20MultiQC%20report/FastQC_on_data_NORMAL%20sample__Webpage/FastQC_on_data_20__Webpage_html.html)
+
+# Generate a report with MultiQC:
+- [MultiQC Report](file:///C:/Users/ramis/OneDrive/Desktop/bioinformetics%201/RNA-seq%20analysis/FastQC%20and%20MultiQC%20report/MultiQC__Webpage_html.html)
