@@ -1,7 +1,7 @@
 
 # RNA_seq_analysis_for_ALS
 
-- [My Project](file:///C:/Users/ramis/OneDrive/Desktop/BIOINFORMATICS%20202/RNA_seq_analysis/RNA_seq_analysis.html)
+- [My Project](https://github.com/ramisha-azhar/RNA_seq_analysis-for-ALS/blob/main/RNA_seq_analysis.html)
 
 - [The Project](file:///C:/Users/ramis/OneDrive/Desktop/bioinformatics%201/Bioinformatics1_2025-20250716T162722Z-1-001/Bioinformatics1_2025/EXAM%20project/project_RNAseq_2025.html#Software_to_install_in_your_conda_environment)
 
